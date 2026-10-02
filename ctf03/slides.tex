@@ -1,0 +1,495 @@
+% =====================================================================
+%  Fluffy (Google CTF 2025) - reversing
+%  Engenharia reversa de um app Flutter/Dart AOT e otimizacao de
+%  forca bruta via periodicidade de 16 rodadas
+%
+%  Compilacao:  pdflatex slides.tex   (rode 2x para o sumario/overlays)
+%  Necessita:   beamer, tikz, listings (padrao em TeX Live / MiKTeX)
+% =====================================================================
+\documentclass[aspectratio=169]{beamer}
+
+% - idioma e codificacao -------------------------------------------
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[brazilian]{babel}
+
+% - matematica / extras --------------------------------------------
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{listings}
+
+% - tikz -----------------------------------------------------------
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, calc, positioning}
+
+% - tema -----------------------------------------------------------
+\usetheme{Madrid}
+\usecolortheme{whale}
+\setbeamertemplate{navigation symbols}{}
+
+% - identidade da apresentacao --------------------------------------
+\title[Fluffy - Google CTF 2025]{Quebrando um cofre em Flutter: engenharia reversa e otimização de força bruta}
+\subtitle{Desafio \emph{Fluffy} (Google CTF 2025) --- Dart AOT, token derivado de timestamp e periodicidade de 16 rodadas}
+\author[Integrantes do grupo]{{\footnotesize
+  \begin{tabular}{@{}r@{\hspace{0.8em}}l@{}}
+    822070 & Nicolas Queiroz Bertozzo\\
+    821402 & Gustavo Cesar Bento Laurindo\\
+    811537 & Danilo da Silva Pinto\\
+    811943 & Lucas de Oliveira Rodrigues Alves\\
+    813583 & Lucas de Araújo Cardoso\\
+    823127 & Nicole Correa Ramos\\
+    811649 & Gabriel Vianna de Oliveira Spolon\\
+    812110 & Pedro Guilherme Torres das Neves\\
+    832627 & Lucas Martinez Domingues
+  \end{tabular}}}
+\institute[UFSCar]{Universidade Federal de São Carlos}
+\date{2 de outubro de 2026}
+
+% - configuracoes de listagem --------------------------------------
+\lstset{
+  language=Python,
+  basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\color{blue!60!black}\bfseries,
+  commentstyle=\color{gray!60!black}\itshape,
+  stringstyle=\color{teal},
+  showstringspaces=false,
+  columns=fullflexible,
+  keepspaces=true,
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!8},
+}
+
+% =====================================================================
+\begin{document}
+
+% ---------------------------------------------------------------------
+\begin{frame}[plain]
+  \begin{beamercolorbox}[sep=12pt,center,wd=\textwidth]{title}
+    \usebeamerfont{title}\inserttitle\par
+    \vspace{0.25em}
+    {\usebeamerfont{subtitle}\insertsubtitle\par}
+  \end{beamercolorbox}
+  \vspace{0.7em}
+  \begin{center}
+    {\large\usebeamercolor[fg]{structure}\textbf{Integrantes do grupo}\par}
+    \vspace{0.4em}
+    {\footnotesize
+    \begin{tabular}{@{}r@{\hspace{1.2em}}l@{}}
+      822070 & Nicolas Queiroz Bertozzo\\
+      821402 & Gustavo Cesar Bento Laurindo\\
+      811537 & Danilo da Silva Pinto\\
+      811943 & Lucas de Oliveira Rodrigues Alves\\
+      813583 & Lucas de Araújo Cardoso\\
+      823127 & Nicole Correa Ramos\\
+      811649 & Gabriel Vianna de Oliveira Spolon\\
+      812110 & Pedro Guilherme Torres das Neves\\
+      832627 & Lucas Martinez Domingues
+    \end{tabular}\par}
+    \vspace{0.7em}
+    {\normalsize\textbf{\insertinstitute}\par}
+    \vspace{0.35em}
+    {\small \insertdate\par}
+  \end{center}
+\end{frame}
+
+% ---------------------------------------------------------------------
+\begin{frame}{Roteiro}
+  \begin{enumerate}
+    \item O desafio e a motivação: um cofre que só encripta
+    \item Fundamentos: onde mora o código em um app Flutter (Dart AOT)
+    \item Reconstrução: âncoras de string e o algoritmo (token + cifra)
+    \item As fragilidades: token determinístico e período de 16 rodadas
+    \item O ataque otimizado e o custo computacional
+    \item Resultados: os três segredos e a flag
+    \item Lições aprendidas e referências
+  \end{enumerate}
+\end{frame}
+
+% ---------------------------------------------------------------------
+\begin{frame}{O desafio e a motivação}
+  \begin{columns}[T]
+    \begin{column}{0.52\textwidth}
+      \textbf{Por que este desafio?}
+      \begin{itemize}
+        \item App \emph{Flutter} que \alert{só encripta} (decriptar está ``em
+              construção''), com algoritmo próprio (\emph{security by obscurity}).
+        \item Encripta com um \texttt{token} e um \texttt{PIN} de 4 dígitos.
+      \end{itemize}
+      \textbf{Os três segredos (Base62):}
+      {\scriptsize
+      \begin{block}{}
+        \texttt{fmMf7mIMbHcPoQmLGx1CO0XVGBmhjTaYhB0}\\
+        \texttt{5O6WRgCajs3QSTyohnu2hldds18mjkx}\\
+        \texttt{fgv99dOvazsvEESh7DPKbb3k0I3RW}
+      \end{block}}
+    \end{column}
+    \begin{column}{0.44\textwidth}
+      \textbf{Nosso objetivo}
+      \begin{itemize}
+        \item \alert{Localizar e reconstruir} o algoritmo dentro do binário
+              compilado (\texttt{libapp.so}, Dart AOT).
+        \item Recuperar os três segredos \emph{sem} conhecer o PIN nem o token.
+        \item Demonstrar a \alert{redução da busca} (periodicidade + horários),
+              e não apenas força bruta ``com muitos núcleos''.
+      \end{itemize}
+      \begin{block}{Pista}
+        1º segredo exibe os \textbf{segundos}; ``amigo da Suíça''
+        $\Rightarrow$ fuso \texttt{Europe/Zurich}.
+      \end{block}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------
+\begin{frame}{Fundamentos: de Dart a \texttt{libapp.so}}
+  \begin{itemize}
+    \item Flutter \emph{debug} usa \textbf{JIT} (interpretado, \emph{hot
+          reload}); Flutter \emph{release} usa \textbf{AOT}: o código Dart é
+          compilado para \alert{código de máquina nativo} e embarcado num
+          objeto ELF --- o \texttt{libapp.so}.
+    \item O \texttt{libapp.so} contém: (1) o código de todas as funções;
+          (2) a \emph{snapshot} (\texttt{\_kDartIsolateSnapshotData}) com o
+          \emph{object pool}: strings, constantes e metadados; (3) tabelas do GC.
+    \item \textbf{Por que é difícil de reverter:}
+      \begin{itemize}
+        \item \alert{Sem tabela de símbolos} das funções do app;
+        \item convenção de chamada e \emph{garbage collector} próprios do Dart;
+        \item formato da \emph{snapshot} \alert{versionado} (Dart 3.8.1, snapshot
+              \texttt{830f4f59\ldots}).
+      \end{itemize}
+    \item \textbf{Mas:} strings e constantes ficam \alert{legíveis} na seção de
+          dados --- é o ponto de entrada da análise.
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------
+\begin{frame}{Reconstrução: âncoras de string e o algoritmo}
+  \begin{columns}[T]
+    \begin{column}{0.48\textwidth}
+      \textbf{Âncoras (via \texttt{strings})}
+      \begin{tabular}{@{}l l@{}}
+        \texttt{gctf25\_} & seed do token\\
+        \texttt{0123\ldots xyz} & alfabeto Base62\\
+        \texttt{Invalid character} & dica no decode\\
+      \end{tabular}
+      \vspace{0.4em}
+      \begin{itemize}
+        \item Seguindo as \emph{cross-references} (Ghidra/radare2) localizam-se
+              \texttt{rol8}/\texttt{ror8} e o laço de \texttt{pin} rodadas.
+        \item \texttt{blutter}/\texttt{darter} automatizam, desde que
+              compatíveis com o Dart 3.8.1.
+      \end{itemize}
+      \begin{block}{Validação (round-trip)}
+        Encriptar com \texttt{token}=\texttt{I6X6vyQzRuH},
+        \texttt{pin}=8126 reproduz \alert{byte a byte} o ciphertext do 1º
+        segredo $\Rightarrow$ reconstrução correta.
+      \end{block}
+    \end{column}
+    \begin{column}{0.52\textwidth}
+      \textbf{Token} (derivado do tempo):
+      \begin{center}
+        {\footnotesize \texttt{token = Base62( SHA1("gctf25\_" + ts)[:8] )}}
+      \end{center}
+      \textbf{Cifra} (rodada $i$, byte $j$; $s$=segredo, $t$=token):
+      {\small
+      \[
+        s_j = \operatorname{rol8}\!\big((s_j + t_{j \bmod 8}) \bmod 256,\; j \bmod 8\big)
+      \]}
+      depois: rota o array de $s$ (direita) e de $t$ (esquerda), e
+      {\small
+      \[
+        t_j = \operatorname{ror8}\!\big(t_j,\; (pin \oplus ((i \bmod 4)+1)) \bmod 8\big)
+      \]}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------
+\begin{frame}{O token que não é aleatório}
+  \begin{center}
+    {\small \texttt{token = Base62( SHA1("gctf25\_" + unix\_seconds)[:8] )}}
+  \end{center}
+  \begin{itemize}
+    \item É uma \alert{KDF determinística do timestamp}: o ``aleatório'' é, na
+          verdade, o relógio. Há só $86400$ tokens por dia.
+    \item O 1º segredo mostra \texttt{04/08/2023 13:37} \alert{com segundos};
+          os demais mostram só o minuto $\Rightarrow$ \textbf{60} candidatos.
+    \item A dica ``Suíça'' fixa o fuso \texttt{Europe/Zurich} para reconstruir
+          o timestamp (a data exibida é local; o app usa o epoch UTC).
+  \end{itemize}
+  \begin{center}
+    \begin{tabular}{@{}l l l@{}}
+      minuto exibido & $\longrightarrow$ & 60 tokens candidatos \\
+      fuso Zurique   & $\longrightarrow$ & converte data local em epoch \\
+    \end{tabular}
+  \end{center}
+\end{frame}
+
+% ---------------------------------------------------------------------
+\begin{frame}[fragile]{A cifra: rodadas e rotações}
+  Essência do \texttt{encrypt} (Python equivalente ao Dart reconstruído):
+  \begin{lstlisting}[basicstyle=\ttfamily\scriptsize]
+def encrypt(pin, token, secret):          # `pin` rodadas no total
+    tok = list(base62_decode(token))
+    enc = list(secret)
+    for i in range(pin):
+        enc = [rol8((s + tok[j % 8]) % 256, j % 8)   # soma + rotacao
+               for j, s in enumerate(enc)]
+        enc = [enc[-1]] + enc[:-1]          # array do segredo: roda -> direita
+        tok = tok[1:] + [tok[0]]            # array do token:  roda -> esquerda
+        tok = [ror8(d, (pin ^ ((i & 3) + 1)) % 8) for d in tok]
+    return base62_encode(bytes(enc))
+  \end{lstlisting}
+  \begin{itemize}
+    \item O número de rodadas é o \alert{próprio PIN} ($1$ a $9999$) --- por
+          isso a força bruta ingênua é cara.
+    \item Todas as operações são bijetivas $\Rightarrow$ existe decriptação
+          (inverso em ordem reversa).
+    \item A rotação de bits \alert{só depende de $pin \bmod 8$ e de $i \bmod 4$}.
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------
+\begin{frame}{O período de 16 rodadas}
+  Com $k = pin \bmod 8$, a rotação de bits é
+  $r_i = (k \oplus ((i \bmod 4)+1)) \bmod 8$ --- \alert{período 4 em $i$}.
+  \begin{columns}[T]
+    \begin{column}{0.55\textwidth}
+      \begin{center}
+      \begin{tikzpicture}[font=\scriptsize, x=0.52cm, y=0.72cm, scale=0.85]
+        \foreach \i in {0,...,15}{%
+          \pgfmathsetmacro{\rr}{int(mod(\i,4)+1)}%
+          \pgfmathsetmacro{\yy}{0.55*\rr}%
+          \draw[blue!60!black,thick] (\i,0) -- (\i,\yy);%
+          \fill[blue!60!black] (\i,\yy) circle (1.1pt);%
+          \node[below=1pt] at (\i,0) {\i};%
+          \node[above=1pt,blue!60!black] at (\i,\yy) {\rr};%
+        }
+        \draw[->] (-0.6,0) -- (16.2,0);
+        \node[align=left,anchor=north west,black!65] at (0.4,3.4)
+          {$k=0$: sequência $1,2,3,4$ repetida 4 vezes};
+        \node[align=left,anchor=north west,blue!60!black] at (0.4,2.7)
+          {soma em 16 $=4\times10=40 \equiv 0 \pmod 8$};
+        \node[align=left,anchor=north west,red!80!black] at (0.4,2.0)
+          {soma em 8 $=2\times10=20 \equiv 4 \pmod 8$};
+      \end{tikzpicture}
+      \end{center}
+    \end{column}
+    \begin{column}{0.45\textwidth}
+      \begin{tabular}{@{}l c c@{}}
+        $k = pin \bmod 8$ & soma em 16 & soma em 8\\
+        \hline
+        $0,1,2,3$ & $40 \equiv 0$ & $20 \equiv 4$\\
+        $4,5,6,7$ & $72 \equiv 0$ & $36 \equiv 4$\\
+      \end{tabular}
+      \vspace{0.2em}
+      \begin{itemize}
+        \item Estado do token = (posição do array, rotação acumulada $S_i$).
+        \item Repete quando $i\equiv0 \pmod 8$ \textbf{e} $S_i\equiv0 \pmod 8$.
+        \item Em $i=8$: $S_8\equiv4$ (\alert{não} repete); em $i=16$:
+              $S_{16}\equiv0$ (\alert{repete}).
+      \end{itemize}
+      \begin{block}{Conclusão}
+        O token dinâmico tem \alert{período exato 16} --- só 16 estados por agenda.
+      \end{block}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------
+\begin{frame}{Conjuntos de PIN mod 8}
+  Como $r_i$ só depende de $k = pin \bmod 8$, há apenas \alert{8 agendas} de
+  rotação. Gerando os 16 estados de cada agenda e agrupando os idênticos:
+  \begin{itemize}
+    \item \textbf{40 estados} distintos de token no total;
+    \item \textbf{8 estados} alcançáveis sob \emph{todos} os 8 valores de $k$;
+    \item \textbf{32 estados} alcançáveis sob \emph{exatamente 2} valores de $k$.
+  \end{itemize}
+  \begin{center}
+    \begin{tabular}{@{}l c c@{}}
+      & estados & pares (estado, agenda)\\
+      \hline
+      universais & $8$ & $8 \times 8 = 64$\\
+      restritos  & $32$ & $32 \times 2 = 64$\\
+      \hline
+      total & $40$ & $\mathbf{128}$ \quad (não $40\times8=320$)
+    \end{tabular}
+  \end{center}
+  \begin{block}{Por que importa}
+    Ao decriptar de trás para frente não sabemos o estado final do token nem o
+    $pin \bmod 8$ --- mas há só \alert{128} combinações relevantes a testar.
+  \end{block}
+\end{frame}
+
+% ---------------------------------------------------------------------
+\begin{frame}[fragile]{O ataque otimizado: caminhar de trás para frente}
+  \begin{columns}[T]
+    \begin{column}{0.58\textwidth}
+      \begin{lstlisting}[basicstyle=\ttfamily\scriptsize]
+for tok_pat, pin_mods in tok_patterns:   # <= 40 estados finais
+    for pin_mod in pin_mods:             # agendas (8 ou 2)
+        dyn, secret = tok_pat[:], list(base62_decode(encr))
+        for step in range(max_pin):      # volta 1 rodada/vez
+            secret = secret[1:] + [secret[0]]
+            secret = [(ror8(e, j % 8) - dyn[j % 8]) % 256
+                      for j, e in enumerate(secret)]
+            dyn = [rol8(d, INV_ROT[pin_mod][step % 4])
+                   for d in dyn]
+            dyn = [dyn[-1]] + dyn[:-1]
+            if is_printable(secret):     # oraculo: ASCII 0x20-0x7E
+                return bytes(secret)
+      \end{lstlisting}
+    \end{column}
+    \begin{column}{0.42\textwidth}
+      \begin{itemize}
+        \item Pré-computa os 40 estados finais (período 16) e, para cada par
+              $(estado, agenda)$, \alert{desfaz} uma rodada por passo.
+        \item A tabela \texttt{INV\_ROT} inverte a rotação de bits em $O(1)$.
+        \item \textbf{Oráculo}: o primeiro estado todo imprimível
+              (\texttt{0x20--0x7E}) é o texto claro; o nº de passos é o PIN.
+      \end{itemize}
+      \begin{alertblock}{}
+        Custo por token: $\mathbf{128 \times 9999 \approx 1{,}28M}$ passos,
+        contra $\sum_{p=1}^{9999} p \approx 50M$ da ingênua.
+      \end{alertblock}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------
+\begin{frame}{Custo computacional comparado}
+  \begin{center}
+  \begin{tabular}{@{}l r r c@{}}
+    Estratégia & por token & total ($\times60$) & fator\\
+    \hline
+    Ingênua (recalcula $p$ rodadas por PIN) & $\approx 50M$ & $\approx 3{,}0\times10^{9}$ & $1\times$\\
+    Período 16 + PIN mod 8 & $\approx 1{,}28M$ & $\approx 7{,}7\times10^{7}$ & \alert{$\approx 39\times$}\\
+  \end{tabular}
+  \end{center}
+  \vspace{0.5em}
+  \begin{itemize}
+    \item A redução \alert{não} muda o nº de combinações de chave
+          ($60\times9999$); elimina o \alert{trabalho redundante} de recomputar
+          $p$ rodadas a cada PIN.
+    \item É exatamente a pergunta da flag: \emph{otimizou, ou só usou muitos
+          núcleos?} --- a resposta técnica é a primeira.
+  \end{itemize}
+  \begin{center}
+    {\small Medido (Ryzen 7 5700X3D, 3 processos): \textbf{378\,s}, \textbf{394\,s},
+    \textbf{535\,s} por segredo.}
+  \end{center}
+\end{frame}
+
+% ---------------------------------------------------------------------
+\begin{frame}{Resultados: os três segredos e a flag}
+  \begin{center}
+  \begin{tabular}{@{}l l c l l@{}}
+    Data & segundo & PIN & token & texto claro\\
+    \hline
+    \texttt{04/08/2023 13:37} & 27 & 8126 & \texttt{I6X6vyQzRuH} & \texttt{CTF\{Ok4y\_h4v3\_u\_0ptim1zed\_}\\
+    \texttt{07/09/2024 18:52} & 31 & 5178 & \texttt{BMiZFI8Xr3Q} & \texttt{brUt3\_f0rcE\_0R\_y0u\_jUst}\\
+    \texttt{03/03/2025 22:07} & 48 & 7490 & \texttt{KZ95PpF1RFq} & \texttt{\_uSeD\_a\_l0t\_0f\_c0Res?\}}\\
+  \end{tabular}
+  \end{center}
+  \vspace{0.4em}
+  \begin{block}{Flag completa}
+    \texttt{CTF\{Ok4y\_h4v3\_u\_0ptim1zed\_brUt3\_f0rcE\_0R\_y0u\_jUst\_uSeD\_a\_l0t\_0f\_c0Res?\}}
+  \end{block}
+  \begin{itemize}
+    \item O 3º segredo é o mais caro: o segundo correto (48) aparece tarde na
+          varredura dos 60.
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------
+\begin{frame}[fragile]{Execução}
+  \begin{columns}[T]
+    \begin{column}{0.56\textwidth}
+      \textbf{Demo} --- \texttt{python fluffy.py demo}:
+      \begin{lstlisting}[basicstyle=\ttfamily\scriptsize]
+$ python fluffy.py demo
+token      : I6X6vyQzRuH
+PIN        : 8126
+ciphertext : fmMf7mIMbHcPoQmLGx1CO0XVGBmhjTaYhB0
+round-trip : b'CTF{Ok4y_h4v3_u_0ptim1zed_'
+round-trip OK
+ciphertext reproduzido: OK
+      \end{lstlisting}
+    \end{column}
+    \begin{column}{0.44\textwidth}
+      \textbf{Ataque completo} (60 s varridos):
+      \begin{lstlisting}[basicstyle=\ttfamily\scriptsize]
+segredo 1 : 378 s
+segredo 2 : 394 s
+segredo 3 : 535 s
+      \end{lstlisting}
+      \vspace{0.4em}
+      {\scriptsize O crack otimizado, com o token correto em mãos, recupera o
+      texto do 1º segredo em \textbf{6,5 s}. O resto do tempo é a varredura dos
+      60 segundos.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------
+\begin{frame}[fragile]{Como reproduzir}
+  \begin{columns}[T]
+    \begin{column}{0.6\textwidth}
+      \begin{lstlisting}[basicstyle=\ttfamily\footnotesize]
+$ python fluffy.py demo
+$ python fluffy.py token '04/08/2023 13:37' 27
+      # -> I6X6vyQzRuH
+$ python fluffy.py crack \
+    '04/08/2023 13:37' \
+    'fmMf7mIMbHcPoQmLGx1CO0XVGBmhjTaYhB0'
+      # ataque otimizado (~6 min)
+      \end{lstlisting}
+    \end{column}
+    \begin{column}{0.4\textwidth}
+      \begin{itemize}
+        \item \texttt{fluffy.py} é autocontido (só biblioteca padrão): token,
+              Base62, cifra e o crack otimizado.
+        \item \texttt{crack.py} é o solver oficial (mesma lógica).
+        \item O relatório completo está em \texttt{relatorio-engenharia-reversa.md}.
+      \end{itemize}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------
+\begin{frame}{Lições aprendidas}
+  \begin{itemize}
+    \item \textbf{Security by obscurity não é segurança}: num binário sem
+          símbolos, as strings entregaram o algoritmo inteiro.
+    \item \textbf{Chave derivada do tempo é chave fraca}: o ``token aleatório''
+          era o relógio --- entropia real (64 bits sorteados) é essencial.
+    \item \textbf{Estrutura periódica vaza}: o período de 16 rodadas permitiu
+          reaproveitar o ciclo e cortar o custo em $\approx39\times$ --- projetar
+          cifra exige pensar na repetição de estado.
+    \item \textbf{RE e criptoanálise juntas}: localizar o algoritmo (RE) foi
+          metade; entender a matemática da cifra (criptoanálise) foi a outra.
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------
+\begin{frame}{Referências}
+  \begin{itemize}
+    \item Google CTF 2025 --- \emph{Fluffy} (repositório, fonte e write-up):
+          \url{https://github.com/google/google-ctf/tree/1655538e8c8b41451d39f670ef15a5af22979ca9/2025/quals/rev-fluffy}
+    \item \texttt{blutter} (reversão de Flutter/Dart AOT):
+          \url{https://github.com/worawit/blutter}
+    \item \texttt{darter} (parser de snapshot Dart):
+          \url{https://github.com/mildsunrise/darter}
+    \item \texttt{frida} (instrumentação dinâmica): \url{https://frida.re}
+    \item Documentação Dart AOT (\texttt{gen\_snapshot}): \url{https://dart.dev}
+  \end{itemize}
+  \vspace{0.5em}
+  \begin{center}
+    {\large Obrigado!}\\[0.2em]
+    {\small Perguntas?}
+  \end{center}
+\end{frame}
+
+\end{document}
